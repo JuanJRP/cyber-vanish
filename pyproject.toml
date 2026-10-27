@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cybervanish"
+version = "0.2.0"
+description = "Desaparece de tu videollamada con un gesto: efectos en una cámara virtual."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "mediapipe>=0.10.14",
+    "opencv-python>=4.9",
+    "numpy>=1.26",
+    "pyvirtualcam>=0.11",
+    "sounddevice>=0.4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.scripts]
+cybervanish = "cybervanish.app:main"
+
+[tool.setuptools.packages.find]
+include = ["cybervanish*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM"]
+ignore = ["E731"]   # lambdas cortas con nombre, como el temblor de la mira
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
