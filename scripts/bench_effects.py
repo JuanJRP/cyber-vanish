@@ -48,6 +48,8 @@ def main():
     ap.add_argument("--only", nargs="+", choices=list(available()), help="solo estos efectos")
     ap.add_argument("--appear", action="store_true", help="captura la reaparición en vez de la desaparición")
     ap.add_argument("--scale", type=float, default=1 / 3, help="tamaño de cada captura en la hoja")
+    ap.add_argument("--at", nargs="+", type=float, default=[0.25, 0.5, 0.75],
+                    help="en qué momentos del efecto (0..1) se hacen las capturas")
     args = ap.parse_args()
 
     frame, person, plate = synthetic_scene(args.width, args.height)
@@ -64,12 +66,13 @@ def main():
             fx.trigger(t0, person, origin=(0.55, 0.45))
         times, shots = [], []
         n = int(args.duration * FPS)
+        at = {round(a * n) for a in args.at}
         for i in range(n + 1):
             t = t0 + i / FPS
             start = time.perf_counter()
             out = fx.render(frame, person, plate, t)
             times.append((time.perf_counter() - start) * 1000)
-            if i in (n // 4, n // 2, 3 * n // 4):
+            if i in at:
                 shots.append(out)
         print(f"{name:10s} {np.mean(times):8.1f} {np.max(times):8.1f}")
         if args.sheet:

@@ -21,6 +21,9 @@ KIND = 10                  # uso libre de cada efecto (glifo, giro, tipo de part
 TX, TY = 11, 12            # destino de las partículas que vuelan a su sitio (-1 = partícula libre)
 COLUMNS = 13
 
+KEY_ORDER = "1234567890abcdefghijklmnopqrstuvwxyz"   # orden del teclado: así se listan los efectos
+RESERVED_KEYS = {"b": "capturar el fondo", "q": "salir", "e": "siguiente efecto", " ": "activar"}
+
 _REGISTRY: dict[str, type[Vanish]] = {}
 
 
@@ -28,6 +31,10 @@ def register(cls: type[Vanish]) -> type[Vanish]:
     """Decorador: deja el efecto disponible en --effect y en su tecla."""
     if not cls.name or not cls.key:
         raise ValueError(f"{cls.__name__} necesita name y key")
+    if cls.key not in KEY_ORDER:
+        raise ValueError(f"La tecla de {cls.name!r} debe ser un número o una letra minúscula, no {cls.key!r}")
+    if cls.key in RESERVED_KEYS:
+        raise ValueError(f"La tecla {cls.key!r} de {cls.name!r} está reservada para {RESERVED_KEYS[cls.key]}")
     if cls.name in _REGISTRY:
         raise ValueError(f"Ya hay un efecto llamado {cls.name!r}")
     taken = {e.key: e.name for e in _REGISTRY.values()}
@@ -38,8 +45,8 @@ def register(cls: type[Vanish]) -> type[Vanish]:
 
 
 def available() -> dict[str, type[Vanish]]:
-    """Efectos registrados, por nombre, en orden de tecla."""
-    return dict(sorted(_REGISTRY.items(), key=lambda item: item[1].key))
+    """Efectos registrados, por nombre, en orden de tecla (1-9, 0 y luego letras)."""
+    return dict(sorted(_REGISTRY.items(), key=lambda item: KEY_ORDER.index(item[1].key)))
 
 
 def create(name: str, width: int, height: int, **options) -> Vanish:
@@ -318,3 +325,14 @@ def glow(layer, alpha=2.0, sigma=3):
 def gray3(img):
     """Imagen en escala de grises, en 3 canales."""
     return cv2.cvtColor(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), cv2.COLOR_GRAY2BGR)
+
+
+def body_box(person, width, height):
+    """(cx, cy, media anchura, arriba, abajo) de la silueta; el centro de la imagen si no hay nadie."""
+    body = person > 0.5
+    cols, rows = np.flatnonzero(body.any(axis=0)), np.flatnonzero(body.any(axis=1))
+    if not len(cols):
+        return width / 2, height / 2, width / 6, height / 4, height - 1
+    # Floats de Python: un escalar de numpy float64 convertiría en float64 los mapas float32 con los que se opera.
+    left, right, top, bottom = int(cols[0]), int(cols[-1]), int(rows[0]), int(rows[-1])
+    return (left + right) / 2, (top + bottom) / 2, max((right - left) / 2, 20.0), top, bottom

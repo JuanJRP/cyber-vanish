@@ -121,6 +121,22 @@ def test_register_rejects_duplicates():
         register(SameKey)
 
 
+@pytest.mark.parametrize("key", ["b", "q", "e", " ", "B", "!"])
+def test_register_rejects_reserved_or_invalid_keys(key):
+    class Bad(Vanish):
+        name = "malo"
+
+    Bad.key = key
+    with pytest.raises(ValueError):
+        register(Bad)
+    assert "malo" not in available()
+
+
+def test_effects_listed_in_keyboard_order():
+    keys = [cls.key for cls in available().values()]
+    assert keys[:10] == list("1234567890")
+
+
 def test_homing_particles_land_on_target():
     fx = create("polvo", W, H)
     fx.GRAVITY = 0.0

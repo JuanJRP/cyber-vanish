@@ -51,16 +51,30 @@ cybervanish --list-effects       # lista los efectos y sus teclas
 | `7` | `fantasma` | te vuelves un espectro translúcido que se separa en colores, ondula en jirones y deja ecos que suben |
 | `8` | `matrix` | te digitalizas en verde y te conviertes en lluvia de código con cabezas blancas que dibuja tu cara |
 
-Al **reaparecer**, todo ocurre al revés: los granos de polvo y los bloques vuelan de vuelta y aterrizan en su sitio justo cuando esa parte de ti aparece, el punto de luz se abre en una línea y luego en tu cuerpo, etc.
+#### Inspirados en anime
 
-Pulsa la tecla en la ventana de vista previa para cambiar de efecto en vivo (no a mitad de una transición; si estás invisible, sigues invisible y reapareces con el nuevo).
+Efectos originales que homenajean desapariciones icónicas del anime (no usan personajes, logos ni textos de las series).
+
+| Tecla | `--effect` | Qué hace | Inspirado en |
+|---|---|---|---|
+| `9` | `humo` | ¡puf! una nube de humo con sombreado de dibujo animado estalla con líneas de impacto; desapareces dentro y se disipa en bolitas | los clones y sustituciones ninja (*Naruto*) |
+| `0` | `hojas` | un remolino de hojas con trazos de viento te envuelve cada vez más rápido, te tapa y el viento se lo lleva | el desplazamiento instantáneo en un torbellino de hojas (*Naruto*) |
+| `c` | `cuervos` | te vuelves tinta y te deshaces en una bandada de cuervos que aletean, entre plumas que caen meciéndose | la dispersión en cuervos (*Naruto*) |
+| `r` | `remolino` | un vórtice espacio-temporal se abre en tu cara, te retuerce y te absorbe hacia un punto negro | el teletransporte por vórtice (*Naruto*) |
+| `v` | `velocidad` | parpadeas y sales disparado de lado, estirado y con líneas de velocidad, dejando imágenes residuales que parpadean | las imágenes residuales de quien se mueve demasiado rápido (*Dragon Ball*, *Bleach*) |
+| `t` | `tiempo` | el tiempo se detiene: una esfera de colores invertidos se expande, la imagen se congela, desapareces y al reanudarse ya no estás | el tiempo detenido (*JoJo's Bizarre Adventure*) |
+
+Al **reaparecer**, todo ocurre al revés: los granos de polvo, los bloques y los cuervos vuelan de vuelta y aterrizan en su sitio justo cuando esa parte de ti aparece, el punto de luz se abre en una línea y luego en tu cuerpo, el remolino te expulsa, llegas a toda velocidad... En `humo` y `tiempo` no es al revés sino como en el anime: apareces dentro de la nube, o con el tiempo detenido.
+
+Pulsa la tecla en la ventana de vista previa para cambiar de efecto en vivo, o `E` para pasar al siguiente (no a mitad de una transición; si estás invisible, sigues invisible y reapareces con el nuevo).
 
 ### Teclas
 
 | Tecla | Acción |
 |---|---|
 | `Espacio` | Activar/desactivar el efecto |
-| `1`–`8` | Elegir efecto |
+| `1`–`9`, `0`, `C`, `R`, `T`, `V` | Elegir efecto (ver tablas de arriba) |
+| `E` | Siguiente efecto |
 | `B` | Capturar el fondo (cuenta atrás de 5 s) |
 | `Q` / `Esc` | Salir |
 
@@ -130,7 +144,7 @@ Cada efecto es un archivo en `cybervanish/effects/` con una clase que hereda de 
    @register
    class MiEfecto(Vanish):
        name = "mi-efecto"     # para --effect
-       key = "9"              # tecla en vivo (única)
+       key = "x"              # tecla en vivo: número o letra minúscula, única (B, Q, E y espacio están reservadas)
        summary = "lo que verá --list-effects"
 
        def _transition(self, frame, person, bg, now, t, p, vanishing):
@@ -155,11 +169,12 @@ Lo que te da la base:
 | `self._arriving(d, margin, lead)` / `self._emit_homing(...)` | al reaparecer, partículas que vuelan a su sitio y aterrizan justo cuando ese píxel aparece |
 | `self._splat(img, p)` | dibujar miles de partículas pequeñas de golpe |
 | `glow`, `band`, `below`, `smoothstep`, `gray3` | utilidades de `base.py` para halos, bandas y mezclas |
+| `body_box(person, w, h)` | centro y límites de tu silueta, para efectos que giran o salen de ti |
 | `GRAVITY`, `DRAG`, `MAX_PARTICLES`, `_forces()` | física de las partículas (viento, flotación, rebotes...) |
 | `GRID`, `MIX`, `BLOB_SIGMA` | forma del frente (recorrido / manchas / ruido) |
 | `_plan()`, `_draw_particles()`, `_vanished()`, `_finish()` | sobrescríbelos si necesitas algo distinto |
 
-Un frame a 1280x720 debería costar menos de ~25 ms (los efectos de serie van de 13 a 25 ms en un portátil normal). Trabaja a 1/4 de resolución lo que vaya a quedar difuminado (llamas, humo, halos).
+Un frame a 1280x720 debería costar menos de ~25 ms (los efectos de serie van de 6 a 25 ms en un portátil normal). Trabaja a 1/4 de resolución lo que vaya a quedar difuminado (llamas, humo, halos).
 
 ## Desarrollo
 
