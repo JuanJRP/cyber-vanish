@@ -13,7 +13,7 @@ import cv2
 
 from .audio import SnapListener
 from .background import BackgroundPlate
-from .effects.cyber import CyberVanish
+from .effects import available, create
 from .gesture import SnapDetector
 from .vision import Tracker
 
@@ -28,6 +28,9 @@ CAPTURE_DELAY = 5.0
 
 def parse_args():
     ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--effect", default="cyber", choices=list(available()),
+                    help="efecto de desaparición (cámbialo en vivo con las teclas 1-9)")
+    ap.add_argument("--list-effects", action="store_true", help="lista los efectos y sus teclas, y sale")
     ap.add_argument("--camera", type=int, default=0, help="índice de la webcam real")
     ap.add_argument("--width", type=int, default=1280)
     ap.add_argument("--height", type=int, default=720)
@@ -77,13 +80,14 @@ def open_virtual_cam(width, height, fps, device):
 
 def draw_status(view, fx, plate, fps, capture_at, now):
     h = view.shape[0]
-    status = f"{fx.state.upper()}  |  fondo {plate.coverage:.0%}  |  {fps:.0f} fps"
+    status = f"{fx.name.upper()} [{fx.key}]  |  {fx.state.upper()}  |  fondo {plate.coverage:.0%}  |  {fps:.0f} fps"
     cv2.putText(view, status, (12, h - 40), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2, cv2.LINE_AA)
-    keys = "ESPACIO: activar  B: capturar fondo  Q: salir   (gesto: chasquea los dedos)"
+    keys = "ESPACIO: activar  1-9: efecto  B: capturar fondo  Q: salir   (gesto: chasquea los dedos)"
     cv2.putText(view, keys, (12, h - 14), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (220, 220, 220), 1, cv2.LINE_AA)
     if capture_at is not None:
         n = max(1, int(capture_at - now + 1))
-        cv2.putText(view, "LEVANTATE Y SAL DEL ENCUADRE", (40, 90), cv2.FONT_HERSHEY_SIMPLEX, 1.4, (255, 0, 255), 3, cv2.LINE_AA)
+        cv2.putText(view, "LEVANTATE Y SAL DEL ENCUADRE", (40, 90), cv2.FONT_HERSHEY_SIMPLEX, 1.4,
+                    (255, 0, 255), 3, cv2.LINE_AA)
         cv2.putText(view, str(n), (40, 200), cv2.FONT_HERSHEY_SIMPLEX, 3.5, (255, 255, 0), 6, cv2.LINE_AA)
     elif plate.coverage < 0.97:
         cv2.putText(view, "Pulsa B, levantate y sal del encuadre para capturar el fondo", (12, 30),
@@ -100,8 +104,26 @@ def debug_snap(mic, snap, hands, now):
               f"centroide {centroid:5.0f} Hz  eco {echo:.2f}  | manos {len(hands)} {pose}  postura {posed}")
 
 
+def print_effects():
+    for name, cls in available().items():
+        print(f"  [{cls.key}] {name:10s} {cls.summary}")
+
+
+def switch_effect(fx, name, width, height, args, now):
+    """Cambia de efecto en vivo. No se puede a mitad de una transición."""
+    if fx.busy or name == fx.name:
+        return fx
+    new = create(name, width, height, duration=args.duration, hud=not args.no_hud, ghost=args.ghost)
+    new.take_over(fx, now)
+    print(f"Efecto: {name}")
+    return new
+
+
 def main():
     args = parse_args()
+    if args.list_effects:
+        print_effects()
+        return
     cap, width, height = open_camera(args)
     print(f"Cámara real: {width}x{height}")
 
@@ -109,7 +131,10 @@ def main():
     plate = BackgroundPlate(width, height)
     mic = None if args.no_mic else SnapListener(args.mic, args.snap_sensitivity)
     snap = SnapDetector(use_audio=bool(mic and mic.active))
-    fx = CyberVanish(width, height, duration=args.duration, hud=not args.no_hud, ghost=args.ghost)
+    fx = create(args.effect, width, height, duration=args.duration, hud=not args.no_hud, ghost=args.ghost)
+    effect_keys = {ord(cls.key): name for name, cls in available().items()}
+    print("Efectos (pulsa su tecla para cambiar):")
+    print_effects()
     vcam = None if args.no_virtual else open_virtual_cam(width, height, args.fps, args.device)
 
     # Pipeline: mientras se dibuja un frame, el tracker ya analiza el siguiente
@@ -139,7 +164,8 @@ def main():
                 capture_at = None
                 print(f"Fondo capturado ({coverage:.0%}).")
                 if coverage < 0.97:
-                    print("  Seguías en cuadro: esa zona se completará cuando te muevas. Pulsa B otra vez si queda mal.")
+                    print("  Seguías en cuadro: esa zona se completará cuando te muevas. "
+                          "Pulsa B otra vez si queda mal.")
             elif capture_at is None and frame_i % 2 == 0:
                 plate.update(frame, person)
 
@@ -174,6 +200,8 @@ def main():
                 fx.trigger(now, body)
             elif key == ord("b"):
                 capture_at = now + CAPTURE_DELAY
+            elif key in effect_keys:
+                fx = switch_effect(fx, effect_keys[key], width, height, args, now)
     except KeyboardInterrupt:
         pass
     finally:

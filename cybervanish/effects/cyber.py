@@ -5,6 +5,8 @@ import math
 import cv2
 import numpy as np
 
+from .base import Vanish, below, glow, normalize, register
+
 CYAN = (255, 255, 0)      # BGR
 MAGENTA = (255, 0, 255)
 YELLOW = (0, 230, 255)
@@ -25,74 +27,37 @@ def _grade_lut():
     return np.clip(lut, 0, 255).astype(np.uint8).reshape(256, 1, 3)
 
 
-class CyberVanish:
-    def __init__(self, width, height, duration=3.0, hud=True, ghost=False):
-        self.w, self.h = width, height
-        self.duration = duration
-        self.hud = hud
-        self.ghost = ghost
-        self.state = "visible"   # visible | vanishing | vanished | appearing
-        self.t0 = 0.0
-        self.last_render = None
+@register
+class CyberVanish(Vanish):
+    name = "cyber"
+    key = "1"
+    summary = "holograma, bloques glitch de neón, onda de choque y HUD SIGNAL_LOST"
+
+    def __init__(self, width, height, **options):
+        super().__init__(width, height, **options)
         self.next_ghost = 0.0
         self.ghost_until = 0.0
-        self.rng = np.random.default_rng()
-        self.order = None        # HxW 0..1: en qué momento del efecto se va cada píxel
         self.neon = None         # HxW x3: color de neón de cada bloque
-        self.drift = None        # HxW: hacia qué lado salen volando los fragmentos (-1 / +1)
         self.wave = None         # HxW 0..1: orden suave (sin bloques) para la onda de holograma
-        self.origin_px = None    # punto del chasquido, centro de la onda de choque
         self.subject_id = 0
-        # x, y, vx, vy, vida, vida_max, tamaño, b, g, r, glifo (-1 = cuadrado)
-        self.particles = np.zeros((0, 11), np.float32)
-        # Grano de cámara precalculado: la foto del fondo sola parecería congelada.
-        self.grain = [self.rng.integers(0, 5, (height, width, 3), dtype=np.uint8) for _ in range(6)]
         self.lut = _grade_lut()
         self.identity = np.arange(256, dtype=np.float32).reshape(256, 1, 1).repeat(3, axis=2)
 
-    @property
-    def busy(self):
-        return self.state in ("vanishing", "appearing")
-
     def trigger(self, now, person, direction=1, origin=None):
-        """origin: (x, y) normalizado desde donde se expande (chasquido). Sin origin, avanza de lado según direction."""
-        if self.busy:
-            return
-        self._plan(person, direction, origin)
-        self.origin_px = None if origin is None else (int(origin[0] * self.w), int(origin[1] * self.h))
-        self.subject_id = int(self.rng.integers(0x1000, 0xFFFF))
-        self.state = "vanishing" if self.state == "visible" else "appearing"
-        self.t0 = now
+        if not self.busy:
+            self.subject_id = int(self.rng.integers(0x1000, 0xFFFF))
+        super().trigger(now, person, direction, origin)
 
     def _plan(self, person, direction, origin):
         gw, gh = -(-self.w // BLOCK), -(-self.h // BLOCK)
-        gx, gy = np.meshgrid(np.linspace(0, 1, gw), np.linspace(0, 1, gh))
-        # El recorrido se reparte sobre la silueta, no sobre toda la imagen,
-        # para que la desintegración ocupe toda la duración.
-        body = cv2.resize(person, (gw, gh), interpolation=cv2.INTER_AREA) > 0.3
-        if not body.any():
-            body[:] = True
-        if origin is None:
-            x0, x1 = gx[body].min(), gx[body].max()
-            pos = np.clip((gx - x0) / (x1 - x0 + 1e-6), 0, 1)
-            pos = pos if direction > 0 else 1 - pos
-            drift = np.full_like(gx, direction)
-        else:
-            ox, oy = origin
-            pos = np.hypot((gx - ox) * self.w / self.h, gy - oy)
-            pos = np.clip(pos / pos[body].max(), 0, 1)
-            drift = np.where(gx >= ox, 1.0, -1.0)
-        # Manchas: zonas vecinas que se van juntas, para que no parezca un simple fundido.
-        blobs = cv2.GaussianBlur(self.rng.random((gh, gw)).astype(np.float32), (0, 0), 3)
-        blobs = (blobs - blobs.min()) / (np.ptp(blobs) + 1e-6)
-        order = 0.45 * pos + 0.3 * blobs + 0.25 * self.rng.random((gh, gw))
-        order = ((order - order.min()) / (np.ptp(order) + 1e-6)).astype(np.float32)
+        pos, drift = self._travel(person, gw, gh, direction, origin)
+        blobs = self._blobs(gw, gh, 3)
+        order = normalize(0.45 * pos + 0.3 * blobs + 0.25 * self.rng.random((gh, gw)))
         # El holograma ocupa el principio: el orden real de desintegración empieza después.
         order = order * (1 - HOLO) + HOLO
         # Onda de holograma: sigue la distancia a la mano pero sin el ruido de bloques,
         # así se ve como un frente continuo que recorre el cuerpo por delante de los bloques.
-        wave = 0.8 * pos + 0.2 * blobs
-        wave = ((wave - wave.min()) / (np.ptp(wave) + 1e-6) * (1 - HOLO)).astype(np.float32)
+        wave = normalize(0.8 * pos + 0.2 * blobs) * (1 - HOLO)
         neon = np.where((self.rng.random((gh, gw)) < 0.5)[..., None], CYAN, MAGENTA).astype(np.uint8)
 
         def up(a):
@@ -101,35 +66,14 @@ class CyberVanish:
         self.order, self.neon, self.drift = up(order), up(neon), up(drift.astype(np.float32))
         self.wave = cv2.resize(wave, (self.w, self.h), interpolation=cv2.INTER_LINEAR)
 
+    def _finish(self, vanishing, now):
+        if vanishing:
+            self.next_ghost = now + self.rng.uniform(4, 8)
+
     # ------------------------------------------------------------------ render
 
-    def render(self, frame, person, plate, now):
-        dt = 0.0 if self.last_render is None else min(now - self.last_render, 0.1)
-        self.last_render = now
-
-        if self.state == "visible":
-            out = frame
-        else:
-            # Cobertura total: incluso el borde suave de la máscara cuenta como persona,
-            # para que no quede ni un contorno translúcido.
-            person = np.clip(person * 2.0, 0, 1)
-            bg = plate.get(now, frame, person)
-            if self.state == "vanished":
-                out = self._vanished(frame, person, bg, now)
-            else:
-                out = self._transition(frame, person, bg, now)
-
-        if len(self.particles):
-            out = self._particles(out, dt)
-        return out
-
-    def _with_grain(self, img):
-        i, j = self.rng.choice(len(self.grain), 2, replace=False)
-        return cv2.subtract(cv2.add(img, self.grain[i]), self.grain[j])
-
     def _vanished(self, frame, person, bg, now):
-        # La salida es solo la foto de la habitación: sin costuras entre lo vivo y lo guardado.
-        out = self._with_grain(bg)
+        out = super()._vanished(frame, person, bg, now)
         if not self.ghost:
             return out
         # De vez en cuando se "cuela" la señal: un parpadeo holográfico de la silueta.
@@ -141,28 +85,21 @@ class CyberVanish:
             out = cv2.blendLinear(out, self._hologram(frame, now), 1 - a, a)
         return out
 
-    def _transition(self, frame, person, bg, now):
-        t = now - self.t0
-        p = min(1.0, t / self.duration)
+    def _transition(self, frame, person, bg, now, t, p, vanishing):
         env = math.sin(math.pi * p)   # intensidad de los efectos globales: 0 → 1 → 0
-        vanishing = self.state == "vanishing"
 
         # Cada píxel pasa por: normal → holograma → bloque glitch de neón → se va (o al revés).
         # (Máscaras con cv2.threshold/multiply: multihilo, mucho más rápido que numpy a 720p.)
         level = p * (1 + 2 * EDGE) - EDGE
-        passed = _below(self.order, level)
-        before_edge = _below(self.order, level + EDGE)
+        passed = below(self.order, level)
+        before_edge = below(self.order, level + EDGE)
         gone = passed if vanishing else 1 - passed
         edge = cv2.multiply(before_edge - passed, person)
         # Holograma: lo que la onda ya alcanzó pero aún no se ha deshecho en bloques.
-        holo = cv2.multiply(cv2.multiply(_below(self.wave, level + HOLO), 1 - before_edge), person)
+        holo = cv2.multiply(cv2.multiply(below(self.wave, level + HOLO), 1 - before_edge), person)
 
-        # Cada bloque es opaco hasta que se va: nada de transparencias. Mientras tanto,
-        # el resto de la imagen pasa poco a poco a la foto del fondo, que queda debajo de todo.
-        s = p * p * (3 - 2 * p)
-        s = s if vanishing else 1 - s
-        a = cv2.multiply(person, gone - s) + s          # = persona·gone + (1 − persona)·s
-        out = cv2.blendLinear(frame, self._with_grain(bg), 1 - a, a)
+        # Cada bloque es opaco hasta que se va: nada de transparencias.
+        out = self._background(frame, bg, person, gone, p, vanishing)
 
         # Holograma: al irse, tu cuerpo se vuelve cian con contorno de neón; al volver, se materializa.
         wh = holo * (self.rng.uniform(0.75, 0.95) if vanishing else self.rng.uniform(0.45, 0.7))
@@ -184,13 +121,6 @@ class CyberVanish:
         if self.hud:
             self._draw_reticle(out, person, p, vanishing)
             self._draw_hud(out, p, vanishing)
-
-        if p >= 1:
-            if vanishing:
-                self.state = "vanished"
-                self.next_ghost = now + self.rng.uniform(4, 8)
-            else:
-                self.state = "visible"
         return out
 
     # ----------------------------------------------------------------- piezas
@@ -233,12 +163,8 @@ class CyberVanish:
 
     def _streaks(self, out, edge, frame, n):
         """Estelas de píxeles arrastrados desde los bloques que se desintegran (pixel stretch)."""
-        idx = np.flatnonzero(edge[::4, ::4].ravel() > 0.5)
-        if not len(idx):
-            return
-        idx = self.rng.choice(idx, min(n, len(idx)), replace=False)
-        ys, xs = np.divmod(idx, edge[::4, ::4].shape[1])
-        for y, x in zip(ys * 4, xs * 4):
+        xs, ys = self._sample(edge, n, stride=4)
+        for x, y in zip(xs, ys, strict=True):
             length = int(self.rng.uniform(40, 240) * self.drift[y, x])
             color = tuple(int(c) for c in frame[y, x])
             cv2.rectangle(out, (int(x), int(y)), (int(x) + length, int(y) + int(self.rng.integers(2, 6))), color, -1)
@@ -246,9 +172,7 @@ class CyberVanish:
     def _neon_glow(self, out, edge):
         e = cv2.convertScaleAbs(edge, alpha=180)
         layer = cv2.multiply(self.neon, cv2.merge([e, e, e]), scale=1 / 255)
-        small = cv2.resize(layer, (self.w // 4, self.h // 4), interpolation=cv2.INTER_AREA)
-        glow = cv2.resize(cv2.GaussianBlur(small, (0, 0), 3), (self.w, self.h))
-        return cv2.add(cv2.add(out, layer), cv2.convertScaleAbs(glow, alpha=2.0))
+        return cv2.add(cv2.add(out, layer), glow(layer, 2.0, 3))
 
     def _grade(self, out, k):
         if k < 0.02:
@@ -267,9 +191,7 @@ class CyberVanish:
         cv2.circle(layer, self.origin_px, r, CYAN, 8, cv2.LINE_AA)
         cv2.circle(layer, self.origin_px, int(r * 0.93), MAGENTA, 3, cv2.LINE_AA)
         cv2.circle(layer, self.origin_px, int(r * 0.86), YELLOW, 1, cv2.LINE_AA)
-        small = cv2.resize(layer, (self.w // 4, self.h // 4), interpolation=cv2.INTER_AREA)
-        glow = cv2.resize(cv2.GaussianBlur(small, (0, 0), 4), (self.w, self.h))
-        layer = cv2.add(layer, cv2.convertScaleAbs(glow, alpha=2.5))
+        layer = cv2.add(layer, glow(layer, 2.5, 4))
         out = cv2.add(out, cv2.convertScaleAbs(layer, alpha=1 - k))
         if t < 0.1:
             v = 140 * (1 - t / 0.1)
@@ -277,12 +199,10 @@ class CyberVanish:
         return out
 
     def _spawn(self, edge, frame, n):
-        idx = np.flatnonzero(edge.ravel() > 0.5)
-        if not len(idx):
+        xs, ys = self._sample(edge, n)
+        k = len(xs)
+        if not k:
             return
-        idx = self.rng.choice(idx, min(n, len(idx)), replace=False)
-        ys, xs = np.divmod(idx, self.w)
-        k = len(idx)
         # Fragmentos que suben y se alejan, como ceniza digital; un tercio son caracteres de datos.
         vx = self.drift[ys, xs] * self.rng.uniform(30, 160, k) + self.rng.normal(0, 40, k)
         vy = self.rng.uniform(-150, -20, k)
@@ -295,20 +215,9 @@ class CyberVanish:
         is_glyph = glyph >= 0
         colors[is_glyph] = np.array([CYAN, MAGENTA, YELLOW], np.float32)[self.rng.integers(0, 3, is_glyph.sum())]
         vy[is_glyph] *= 1.5
-        new = np.column_stack(
-            [xs, ys, vx, vy, life, life, self.rng.uniform(2, 6, k), colors, glyph]
-        ).astype(np.float32)
-        self.particles = np.concatenate([self.particles, new])[-1500:]
+        self._emit(xs, ys, vx, vy, life, self.rng.uniform(2, 6, k), colors, glyph)
 
-    def _particles(self, out, dt):
-        p = self.particles
-        p[:, 0] += p[:, 2] * dt
-        p[:, 1] += p[:, 3] * dt
-        p[:, 2] *= 0.97
-        p[:, 4] -= dt
-        p = p[(p[:, 4] > 0) & (p[:, 0] > -10) & (p[:, 0] < self.w + 10) & (p[:, 1] > -10)]
-        self.particles = p
-
+    def _draw_particles(self, out, p):
         layer = np.zeros_like(out)
         for x, y, _, _, life, max_life, size, b, g, r, glyph in p.tolist():
             f = life / max_life
@@ -364,11 +273,6 @@ class CyberVanish:
             y = 34 + i * 24
             cv2.putText(img, text, (22, y), cv2.FONT_HERSHEY_PLAIN, 1.4, MAGENTA, 2, cv2.LINE_AA)
             cv2.putText(img, text, (20, y), cv2.FONT_HERSHEY_PLAIN, 1.4, CYAN, 2, cv2.LINE_AA)
-
-
-def _below(values, limit):
-    """1.0 donde values < limit, 0.0 en el resto (float32)."""
-    return cv2.threshold(values, limit - 1e-6, 1.0, cv2.THRESH_BINARY_INV)[1]
 
 
 def _aberration(img, shift):
