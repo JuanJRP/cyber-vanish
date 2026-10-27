@@ -1,10 +1,19 @@
 """Imagen de la habitación vacía que se muestra donde "desapareces"."""
 
+import logging
+from concurrent.futures import ThreadPoolExecutor
+
 import cv2
 import numpy as np
 
+from .fill import complete
+
 DIFF_THRESHOLD = 28       # diferencia de color (0-255) para considerar que algo cambió respecto al fondo
 MAX_ATTACHED = 0.6        # si "lo cambiado" ocupa más de esto, es un cambio de luz, no un objeto
+REFILL_EVERY = 6.0        # s: como mucho cada cuánto se rehace el relleno de lo que nunca se vio
+REFILL_GAIN = 0.01        # parte de la imagen recién vista que justifica rehacerlo
+
+log = logging.getLogger(__name__)
 
 
 class BackgroundPlate:
@@ -22,8 +31,18 @@ class BackgroundPlate:
         self.ring_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
         self.prev_attached = None
         self.gain = np.ones(3, np.float32)
+        # Relleno rápido (cv2.inpaint, con rayas) mientras se calcula el bueno por primera vez.
+        self.quick = None
+        self.quick_at = -1.0
+        # Relleno bueno (copiando textura real de la habitación, ver fill.py): tarda un par de
+        # segundos, así que se calcula en segundo plano desde el principio y se rehace al ver más fondo.
+        self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="relleno-fondo")
+        self.job = None
+        self.job_generation = 0
+        self.generation = 0      # cambia al capturar con B: los rellenos de antes ya no valen
         self.filled = None
         self.filled_at = -1.0
+        self.filled_seen = None  # lo que se había visto cuando se lanzó el relleno
 
     @property
     def coverage(self):
@@ -43,11 +62,16 @@ class BackgroundPlate:
         self.seen = free
         self.locked = True
         self.prev_attached = None
-        self.filled = None
+        self.quick = self.filled = None
+        self.generation += 1
         return self.coverage
 
-    def update(self, frame, person):
-        """Aprende el fondo en las zonas donde no hay persona."""
+    def update(self, frame, person, now=None):
+        """Aprende el fondo en las zonas donde no hay persona.
+
+        Con now, además prepara en segundo plano el relleno de lo no visto. Pásalo solo cuando sobre
+        tiempo de CPU (p. ej. mientras no hay un efecto en marcha): el relleno tarda un par de segundos.
+        """
         if self.plate is None:
             self.plate = frame.copy()
         free = self._free(person)
@@ -59,6 +83,8 @@ class BackgroundPlate:
             np.copyto(self.plate, blended, where=(free & self.seen)[..., None])
             np.copyto(self.plate, frame, where=(free & ~self.seen)[..., None])
         self.seen |= free
+        if now is not None:
+            self._refill(now)
 
     def attached(self, frame, person):
         """Persona + todo lo que cambió respecto al fondo y está pegado a ella (silla, sombra, objetos)."""
@@ -114,16 +140,52 @@ class BackgroundPlate:
             return bg
         return cv2.transform(bg, np.diag(self.gain))
 
+    def close(self):
+        self.pool.shutdown(wait=False, cancel_futures=True)
+
     def _complete(self, now):
-        """El fondo con los huecos nunca vistos rellenados por inpainting."""
+        """El fondo con los huecos nunca vistos rellenados."""
         if self.seen.all():
             return self.plate
-        if self.filled is None or now - self.filled_at > 0.5:
-            w, h = self.size
+        self._refill(now, start=False)   # durante un efecto solo se recoge: no se lanza trabajo nuevo
+        if self.filled is None:
+            return self._quick_fill(now)
+        # Lo que se ha visto desde que se lanzó el relleno usa el fondo real; el resto, el relleno.
+        return np.where(self.seen[..., None], self.plate, self.filled)
+
+    def _refill(self, now, start=True):
+        """Recoge el relleno en segundo plano si ya terminó y (con start) lanza otro si se ha visto bastante más."""
+        if self.plate is None or self.seen.all():
+            return
+        if self.job is not None:
+            if not self.job.done():
+                return
+            try:
+                result = self.job.result()
+            except Exception:   # un fallo del relleno no debe tumbar la llamada: queda el rápido
+                log.exception("Falló el relleno del fondo")
+                result = None
+            if result is not None and self.job_generation == self.generation:
+                self.filled = result
+            self.job = None
+        if not start:
+            return
+        stale = self.filled is None or (
+            now - self.filled_at > REFILL_EVERY and (self.seen & ~self.filled_seen).mean() > REFILL_GAIN
+        )
+        if stale:
+            self.filled_seen = self.seen.copy()
+            self.filled_at = now
+            self.job_generation = self.generation
+            self.job = self.pool.submit(complete, self.plate.copy(), ~self.filled_seen)
+
+    def _quick_fill(self, now):
+        """cv2.inpaint a baja resolución: inmediato pero con rayas. Solo hasta que llega el relleno bueno."""
+        if self.quick is None or now - self.quick_at > 0.5:
             small = cv2.resize(self.plate, self.small_size, interpolation=cv2.INTER_AREA)
             holes = cv2.resize((~self.seen).astype(np.uint8), self.small_size, interpolation=cv2.INTER_NEAREST)
             fixed = cv2.resize(cv2.inpaint(small, holes, 5, cv2.INPAINT_TELEA), self.size)
-            self.filled = self.plate.copy()
-            np.copyto(self.filled, fixed, where=~self.seen[..., None])
-            self.filled_at = now
-        return self.filled
+            self.quick = self.plate.copy()
+            np.copyto(self.quick, fixed, where=~self.seen[..., None])
+            self.quick_at = now
+        return self.quick

@@ -167,7 +167,8 @@ def main():
                     print("  Seguías en cuadro: esa zona se completará cuando te muevas. "
                           "Pulsa B otra vez si queda mal.")
             elif capture_at is None and frame_i % 2 == 0:
-                plate.update(frame, person)
+                # El relleno de lo no visto se prepara solo cuando sobra CPU: mientras se te ve.
+                plate.update(frame, person, now if fx.state == "visible" else None)
 
             # Lo que desaparece: tú + lo pegado a ti que no estaba en el fondo (la silla, tu sombra...).
             body = plate.attached(frame, person)
@@ -206,6 +207,7 @@ def main():
         pass
     finally:
         pool.shutdown(cancel_futures=True)
+        plate.close()
         if mic:
             mic.close()
         cap.release()
