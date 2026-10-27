@@ -45,18 +45,27 @@ def main():
     ap.add_argument("--height", type=int, default=720)
     ap.add_argument("--duration", type=float, default=3.0)
     ap.add_argument("--sheet", help="guarda una hoja de capturas en esta ruta")
+    ap.add_argument("--only", nargs="+", choices=list(available()), help="solo estos efectos")
+    ap.add_argument("--appear", action="store_true", help="captura la reaparición en vez de la desaparición")
+    ap.add_argument("--scale", type=float, default=1 / 3, help="tamaño de cada captura en la hoja")
     args = ap.parse_args()
 
     frame, person, plate = synthetic_scene(args.width, args.height)
     rows = []
     print(f"{'efecto':10s} {'media':>8s} {'peor':>8s}   (ms por frame a {args.width}x{args.height})")
-    for name in available():
+    for name in args.only or available():
         fx = create(name, args.width, args.height, duration=args.duration)
         fx.trigger(0.0, person, origin=(0.55, 0.45))
+        t0 = 0.0
+        if args.appear:
+            for i in range(int(args.duration * FPS) + 45):
+                fx.render(frame, person, plate, i / FPS)
+            t0 = (int(args.duration * FPS) + 45) / FPS
+            fx.trigger(t0, person, origin=(0.55, 0.45))
         times, shots = [], []
         n = int(args.duration * FPS)
         for i in range(n + 1):
-            t = i / FPS
+            t = t0 + i / FPS
             start = time.perf_counter()
             out = fx.render(frame, person, plate, t)
             times.append((time.perf_counter() - start) * 1000)
@@ -64,7 +73,8 @@ def main():
                 shots.append(out)
         print(f"{name:10s} {np.mean(times):8.1f} {np.max(times):8.1f}")
         if args.sheet:
-            row = np.hstack([cv2.resize(s, (args.width // 3, args.height // 3)) for s in shots])
+            size = (int(args.width * args.scale), int(args.height * args.scale))
+            row = np.hstack([cv2.resize(s, size, interpolation=cv2.INTER_AREA) for s in shots])
             cv2.putText(row, name, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2, cv2.LINE_AA)
             rows.append(row)
     if args.sheet:

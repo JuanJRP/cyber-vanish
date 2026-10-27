@@ -1,10 +1,13 @@
 """Cada efecto debe recorrer desaparecer → invisible → aparecer sin errores y dejar ver el fondo al final."""
 
+from pathlib import Path
+
 import cv2
 import numpy as np
 import pytest
 
 from cybervanish.effects import Vanish, available, create, register
+from cybervanish.effects.base import X, Y
 
 W, H = 320, 180
 FPS = 30
@@ -116,3 +119,22 @@ def test_register_rejects_duplicates():
         register(Copy)
     with pytest.raises(ValueError, match="tecla"):
         register(SameKey)
+
+
+def test_homing_particles_land_on_target():
+    fx = create("polvo", W, H)
+    fx.GRAVITY = 0.0
+    life = 0.5
+    fx._emit_homing(np.array([0.0]), np.array([0.0]), np.array([100.0]), np.array([50.0]),
+                    np.array([life]), np.array([2]), np.array([[255, 255, 255]]))
+    out = np.zeros((H, W, 3), np.uint8)
+    for _ in range(int(life * FPS) - 1):
+        fx._particles(out, 1 / FPS)
+    assert len(fx.particles) == 1
+    assert abs(fx.particles[0, X] - 100) < 2 and abs(fx.particles[0, Y] - 50) < 2
+
+
+def test_readme_lists_every_effect():
+    readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
+    for name, cls in available().items():
+        assert f"| `{cls.key}` | `{name}` |" in readme, f"Falta {name} en la tabla de efectos del README"
