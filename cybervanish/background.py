@@ -12,6 +12,15 @@ DIFF_THRESHOLD = 28       # diferencia de color (0-255) para considerar que algo
 MAX_ATTACHED = 0.6        # si "lo cambiado" ocupa más de esto, es un cambio de luz, no un objeto
 REFILL_EVERY = 6.0        # s: como mucho cada cuánto se rehace el relleno de lo que nunca se vio
 REFILL_GAIN = 0.01        # parte de la imagen recién vista que justifica rehacerlo
+REFILL_EXPOSURE = 0.06    # ...o cambio relativo de brillo del fondo (la webcam reajustó la exposición)
+MIN_SEEN_TO_FILL = 0.15   # sin haber visto al menos esto del fondo no hay de dónde copiar textura
+STABLE_UPDATES = 3        # un píxel cuenta como fondo tras verse libre en tantas actualizaciones seguidas
+# Arranque de la cámara: los primeros frames suelen salir negros o subiendo de brillo, y en ellos
+# MediaPipe no ve a nadie. Si se aprendieran, quedaría un parche negro donde estás.
+MIN_BRIGHTNESS = 12       # brillo medio (0-255) por debajo del cual el frame no vale
+EXPOSURE_STABLE = 0.04    # cambio relativo de brillo entre actualizaciones que se considera estable
+WARMUP_STABLE = 8         # actualizaciones seguidas con brillo estable para empezar a aprender
+WARMUP_MAX = 90           # ...o, como mucho, tras tantas actualizaciones (~6 s), por si la luz parpadea
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +52,12 @@ class BackgroundPlate:
         self.filled = None
         self.filled_at = -1.0
         self.filled_seen = None  # lo que se había visto cuando se lanzó el relleno
+        self.filled_level = 0.0  # brillo del fondo cuando se lanzó el relleno
+        self.free_run = np.zeros((height, width), np.uint8)   # actualizaciones seguidas libre de persona
+        self.ready = False       # la cámara ya terminó de arrancar
+        self.updates = 0
+        self.stable = 0
+        self.prev_level = None
 
     @property
     def coverage(self):
@@ -72,9 +87,13 @@ class BackgroundPlate:
         Con now, además prepara en segundo plano el relleno de lo no visto. Pásalo solo cuando sobre
         tiempo de CPU (p. ej. mientras no hay un efecto en marcha): el relleno tarda un par de segundos.
         """
+        if not self._usable(frame):
+            return
+        # Solo se aprende lo que lleva un rato libre: si MediaPipe te pierde un frame, no se te graba.
+        self.free_run = np.where(self._free(person), np.minimum(self.free_run, 254) + 1, 0).astype(np.uint8)
+        free = self.free_run >= STABLE_UPDATES
         if self.plate is None:
             self.plate = frame.copy()
-        free = self._free(person)
         if self.locked:
             # Fondo fijado: solo se completan huecos que nunca se vieron.
             np.copyto(self.plate, frame, where=(free & ~self.seen)[..., None])
@@ -85,6 +104,21 @@ class BackgroundPlate:
         self.seen |= free
         if now is not None:
             self._refill(now)
+
+    def _usable(self, frame):
+        """¿Sirve este frame para aprender? No mientras la cámara arranca ni si sale casi negro."""
+        level = _level(frame)
+        if level < MIN_BRIGHTNESS:
+            self.stable = 0
+            self.prev_level = level
+            return False
+        if not self.ready:
+            self.updates += 1
+            steady = self.prev_level is not None and abs(level - self.prev_level) <= EXPOSURE_STABLE * self.prev_level
+            self.stable = self.stable + 1 if steady else 0
+            self.ready = self.stable >= WARMUP_STABLE or self.updates >= WARMUP_MAX
+        self.prev_level = level
+        return self.ready
 
     def attached(self, frame, person):
         """Persona + todo lo que cambió respecto al fondo y está pegado a ella (silla, sombra, objetos)."""
@@ -168,12 +202,16 @@ class BackgroundPlate:
             if result is not None and self.job_generation == self.generation:
                 self.filled = result
             self.job = None
-        if not start:
+        if not start or self.coverage < MIN_SEEN_TO_FILL:
             return
+        level = _level(self.plate)
         stale = self.filled is None or (
-            now - self.filled_at > REFILL_EVERY and (self.seen & ~self.filled_seen).mean() > REFILL_GAIN
+            now - self.filled_at > REFILL_EVERY
+            and ((self.seen & ~self.filled_seen).mean() > REFILL_GAIN
+                 or abs(level - self.filled_level) > REFILL_EXPOSURE * max(self.filled_level, 1.0))
         )
         if stale:
+            self.filled_level = level
             self.filled_seen = self.seen.copy()
             self.filled_at = now
             self.job_generation = self.generation
@@ -189,3 +227,8 @@ class BackgroundPlate:
             np.copyto(self.quick, fixed, where=~self.seen[..., None])
             self.quick_at = now
         return self.quick
+
+
+def _level(img):
+    """Brillo medio (0-255), calculado sobre una miniatura."""
+    return float(cv2.resize(img, (32, 18), interpolation=cv2.INTER_AREA).mean())

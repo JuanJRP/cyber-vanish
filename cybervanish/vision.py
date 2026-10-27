@@ -1,9 +1,12 @@
 """Detección de silueta y manos con MediaPipe Tasks."""
 
+import shutil
+import ssl
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import certifi
 import cv2
 import mediapipe as mp
 import numpy as np
@@ -24,7 +27,11 @@ def ensure_model(name):
         MODELS_DIR.mkdir(exist_ok=True)
         print(f"Descargando modelo {name}...")
         tmp = path.with_name(name + ".part")
-        urllib.request.urlretrieve(MODEL_URLS[name], tmp)
+        # Certificados de certifi: el Python de python.org en macOS no trae los del sistema
+        # y la descarga fallaría con CERTIFICATE_VERIFY_FAILED.
+        context = ssl.create_default_context(cafile=certifi.where())
+        with urllib.request.urlopen(MODEL_URLS[name], context=context, timeout=60) as resp, open(tmp, "wb") as f:
+            shutil.copyfileobj(resp, f)
         tmp.replace(path)
     return str(path)
 
