@@ -29,7 +29,7 @@ CAPTURE_DELAY = 5.0
 def parse_args():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--effect", default="cyber", choices=list(available()),
-                    help="efecto de desaparición (cámbialo en vivo con las teclas 1-9)")
+                    help="efecto de desaparición (cámbialo en vivo con su tecla o con E)")
     ap.add_argument("--list-effects", action="store_true", help="lista los efectos y sus teclas, y sale")
     ap.add_argument("--camera", type=int, default=0, help="índice de la webcam real")
     ap.add_argument("--width", type=int, default=1280)
@@ -82,7 +82,7 @@ def draw_status(view, fx, plate, fps, capture_at, now):
     h = view.shape[0]
     status = f"{fx.name.upper()} [{fx.key}]  |  {fx.state.upper()}  |  fondo {plate.coverage:.0%}  |  {fps:.0f} fps"
     cv2.putText(view, status, (12, h - 40), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2, cv2.LINE_AA)
-    keys = "ESPACIO: activar  1-9: efecto  B: capturar fondo  Q: salir   (gesto: chasquea los dedos)"
+    keys = "ESPACIO: activar  1-0 C R T V: efecto  E: siguiente  B: capturar fondo  Q: salir"
     cv2.putText(view, keys, (12, h - 14), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (220, 220, 220), 1, cv2.LINE_AA)
     if capture_at is not None:
         n = max(1, int(capture_at - now + 1))
@@ -203,6 +203,9 @@ def main():
                 capture_at = now + CAPTURE_DELAY
             elif key in effect_keys:
                 fx = switch_effect(fx, effect_keys[key], width, height, args, now)
+            elif key == ord("e"):
+                names = list(available())
+                fx = switch_effect(fx, names[(names.index(fx.name) + 1) % len(names)], width, height, args, now)
     except KeyboardInterrupt:
         pass
     finally:
