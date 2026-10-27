@@ -32,7 +32,7 @@ cybervanish --effect fuego       # empieza con otro efecto
 cybervanish --list-effects       # lista los efectos y sus teclas
 ```
 
-1. Pulsa **B**, levántate y sal del encuadre: en 5 s captura la habitación. (Si no lo haces, el fondo se va aprendiendo solo mientras te mueves, pero los huecos se rellenan peor.)
+1. Pulsa **B**, levántate y sal del encuadre: en 5 s captura la habitación. Es lo que mejor queda. (Si no lo haces, el fondo se va aprendiendo solo mientras te mueves, y lo que nunca se llegó a ver se reconstruye copiando textura real de tu habitación; ver [Sin capturar el fondo](#sin-capturar-el-fondo).)
    - Todo lo que esté pegado a ti y no estuviera en ese fondo desaparece contigo: silla, sombra, lo que tengas en la mano.
    - **Silla giratoria**: captura el fondo *sin la silla* (apártala) y desaparecerás con silla y todo.
 2. En Meet → Configuración → Vídeo, elige **Cyber Cam** / **OBS Virtual Camera**.
@@ -91,6 +91,26 @@ Pulsa la tecla en la ventana de vista previa para cambiar de efecto en vivo (no 
 - La vista previa sale reflejada como un espejo (el HUD se lee al revés ahí); lo que reciben los demás va sin reflejar.
 - **¿En el celular?** No funciona en Android/iOS (ni con Termux): MediaPipe no tiene versión para Termux y el sistema no deja crear cámaras virtuales. Úsalo en el ordenador; si quieres usar el celular como cámara, conéctalo como webcam (DroidCam, Iriun o el modo webcam USB de Android 14+) y elígelo con `--camera N`.
 
+## Sin capturar el fondo
+
+Si no pulsas **B**, la app aprende la habitación con lo que va quedando a la vista mientras te mueves. Lo que tu cuerpo nunca dejó ver se reconstruye en `cybervanish/fill.py` así:
+
+1. **Copiando textura real de tu habitación** (completado por ejemplos, Wexler et al. 2007): cada trozo del hueco busca, de grueso a fino, el trozo de habitación que mejor encaja con lo que tiene alrededor, y al final se copian los píxeles reales a resolución completa.
+2. **En trozos grandes y contiguos** (búsqueda coherente, Ashikhmin 2001): cada trozo prefiere seguir copiando de donde copia su vecino, así la pared o la estantería se ven nítidas en vez de una media borrosa.
+3. **Con el tono del entorno**: el brillo y el color generales salen de una interpolación suave desde el borde, para que no quede una silueta más clara u oscura que delate dónde estabas.
+
+Antes se usaba `cv2.inpaint`, que estira los bordes hacia dentro y deja las rayas en abanico. El relleno nuevo tarda ~2 s, así que se calcula en segundo plano desde que abres la app (solo mientras se te ve, para no frenar los efectos) y se rehace cuando se ha visto más fondo; hasta que está listo, se usa el rápido.
+
+Lo que nunca se vio no se puede adivinar: si detrás de ti hay un objeto que la cámara no llegó a ver, se rellenará con algo plausible de alrededor, no con el objeto. Para un resultado perfecto, captura con **B**; si no, muévete un poco (inclínate a un lado y al otro) antes de desaparecer para que vea más.
+
+Para ver cómo queda con una foto de tu habitación, sin cámara:
+
+```bash
+python scripts/bench_background.py --image foto_de_tu_habitacion.jpg --out fondo.png
+```
+
+Se probó también LaMa (red neuronal de inpainting, vía `cv2.dnn` y onnxruntime): con huecos del tamaño de una persona (~25 % de la imagen) dibuja una sombra con forma de persona o un gris plano, tarda 3–4 s en CPU y pesa 208 MB, así que se descartó.
+
 ## Crear tu propio efecto
 
 Cada efecto es un archivo en `cybervanish/effects/` con una clase que hereda de `Vanish`. La base ya se encarga de los estados (visible → desapareciendo → invisible → apareciendo), del fondo, del grano de cámara y de las partículas; tú solo dibujas un frame de la transición.
@@ -145,6 +165,7 @@ pip install -e ".[dev]"
 pytest                               # tests de los efectos (sin cámara)
 ruff check .                         # estilo y errores comunes
 python scripts/bench_effects.py      # ms por frame de cada efecto
+python scripts/bench_background.py   # cómo queda el fondo sin capturarlo con B
 ```
 
 La CI de GitHub ejecuta `ruff` y `pytest` en cada push y pull request.
@@ -159,10 +180,12 @@ cybervanish/
   gesture.py              detector de chasquido
   audio.py                escucha el micrófono para el chasquido
   background.py           fondo de la habitación vacía
+  fill.py                 reconstrucción de lo que nunca se vio (copiando textura real)
   effects/
     base.py               clase Vanish y registro de efectos
     cyber.py, dust.py,    un archivo por efecto
     fire.py, ...
-tests/                    tests de los efectos
-scripts/bench_effects.py  rendimiento y capturas
+tests/                    tests de los efectos y del relleno del fondo
+scripts/bench_effects.py  rendimiento y capturas de los efectos
+scripts/bench_background.py  el fondo sin capturar, con una foto tuya
 ```
