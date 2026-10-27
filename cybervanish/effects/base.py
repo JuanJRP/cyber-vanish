@@ -14,6 +14,13 @@ import numpy as np
 if TYPE_CHECKING:
     from ..background import BackgroundPlate
 
+# Columnas de Vanish.particles.
+X, Y, VX, VY, LIFE, MAX_LIFE, SIZE = range(7)
+COLOR = slice(7, 10)       # b, g, r
+KIND = 10                  # uso libre de cada efecto (glifo, giro, tipo de partícula...)
+TX, TY = 11, 12            # destino de las partículas que vuelan a su sitio (-1 = partícula libre)
+COLUMNS = 13
+
 _REGISTRY: dict[str, type[Vanish]] = {}
 
 
@@ -51,8 +58,8 @@ class Vanish:
     GRID = 4                 # resolución (px) del mapa de orden
     MIX = (0.5, 0.3, 0.2)    # peso de recorrido, manchas y ruido en el orden en que se va cada píxel
     BLOB_SIGMA = 3           # tamaño de las manchas (en celdas de GRID)
-    GRAVITY = 0.0            # px/s² hacia abajo para las partículas
-    DRAG = 0.97              # frenado horizontal de las partículas por frame
+    GRAVITY = 0.0            # px/s² hacia abajo para las partículas libres
+    DRAG = 0.97              # frenado horizontal de las partículas libres por frame
     MAX_PARTICLES = 1500
 
     def __init__(self, width: int, height: int, duration: float = 3.0, hud: bool = True, ghost: bool = False):
@@ -62,13 +69,13 @@ class Vanish:
         self.ghost = ghost
         self.state = "visible"   # visible | vanishing | vanished | appearing
         self.t0 = 0.0
+        self.now = 0.0
         self.last_render: float | None = None
         self.rng = np.random.default_rng()
         self.order = np.zeros((height, width), np.float32)   # 0..1: en qué momento del efecto se va cada píxel
         self.drift = np.ones((height, width), np.float32)    # hacia qué lado salen volando los trozos (-1 / +1)
         self.origin_px: tuple[int, int] | None = None        # punto del chasquido
-        # x, y, vx, vy, vida, vida_max, tamaño, b, g, r, glifo (-1 = cuadrado)
-        self.particles = np.zeros((0, 11), np.float32)
+        self.particles = np.zeros((0, COLUMNS), np.float32)
         # Grano de cámara precalculado: la foto del fondo sola parecería congelada.
         self.grain = [self.rng.integers(0, 5, (height, width, 3), dtype=np.uint8) for _ in range(6)]
 
@@ -131,7 +138,7 @@ class Vanish:
     def render(self, frame: np.ndarray, person: np.ndarray, plate: BackgroundPlate, now: float) -> np.ndarray:
         """frame: BGR uint8 HxWx3. person: máscara float32 HxW 0..1. Devuelve el frame de salida."""
         dt = 0.0 if self.last_render is None else min(now - self.last_render, 0.1)
-        self.last_render = now
+        self.last_render = self.now = now
 
         if self.state == "visible":
             out = frame
@@ -173,13 +180,28 @@ class Vanish:
         return cv2.subtract(cv2.add(img, self.grain[i]), self.grain[j])
 
     def _front(self, p, vanishing, margin=0.0):
-        """Distancia de cada píxel al frente de avance: > 0 sigue ahí, <= 0 ya se fue.
+        """Distancia de cada píxel al frente de avance: > 0 sigue ahí, <= 0 ya se fue (o aún no llegó).
 
         margin: cuánto antes de p = 0 empieza el frente y cuánto después de p = 1 acaba,
         para que la banda del borde también recorra los extremos.
         """
         level = np.float32(p * (1 + 2 * margin) - margin)
         return self.order - level if vanishing else level - self.order
+
+    def _front_speed(self, margin=0.0):
+        """Cuánto avanza el frente (en unidades de _front) por segundo."""
+        return (1 + 2 * margin) / self.duration
+
+    def _arriving(self, d, margin, lead):
+        """Al aparecer (d < 0: aún no está), los píxeles que llegarán dentro de ~lead segundos.
+
+        Devuelve (máscara, velocidad del frente). El tiempo de llegada de cada píxel es -d / velocidad:
+        sirve para lanzar partículas que vuelen a su sitio y aterricen justo cuando ese píxel aparece.
+        """
+        speed = self._front_speed(margin)
+        far = -lead * speed
+        # La banda es lo que avanza el frente en ~2 frames: así no se salta ningún píxel.
+        return band(d, np.float32(far - speed / 15), np.float32(far)), speed
 
     def _background(self, frame, bg, person, gone, p, vanishing):
         """La persona se sustituye por el fondo donde ya se fue (gone = 1); el resto de la imagen
@@ -188,13 +210,26 @@ class Vanish:
         a = cv2.multiply(person, gone - s) + s   # = persona·gone + (1 − persona)·s
         return cv2.blendLinear(frame, self._with_grain(bg), 1 - a, a)
 
-    def _emit(self, xs, ys, vx, vy, life, size, colors, glyph=None):
+    def _emit(self, xs, ys, vx, vy, life, size, colors, kind=None):
+        """Partículas libres: salen de (xs, ys) con velocidad (vx, vy) y las mueve la física."""
         k = len(xs)
         if not k:
             return
-        glyph = np.full(k, -1) if glyph is None else glyph
-        new = np.column_stack([xs, ys, vx, vy, life, life, size, colors, glyph]).astype(np.float32)
-        self.particles = np.concatenate([self.particles, new])[-self.MAX_PARTICLES :]
+        kind = np.full(k, -1) if kind is None else kind
+        none = np.full(k, -1)
+        self._add(np.column_stack([xs, ys, vx, vy, life, life, size, colors, kind, none, none]))
+
+    def _emit_homing(self, xs, ys, tx, ty, life, size, colors, kind=None):
+        """Partículas que vuelan de (xs, ys) a (tx, ty) frenando, y aterrizan justo al acabar su vida."""
+        k = len(xs)
+        if not k:
+            return
+        kind = np.full(k, -1) if kind is None else kind
+        # En las que vuelan a su sitio, VX/VY guardan la distancia inicial al destino.
+        self._add(np.column_stack([xs, ys, xs - tx, ys - ty, life, life, size, colors, kind, tx, ty]))
+
+    def _add(self, rows):
+        self.particles = np.concatenate([self.particles, rows.astype(np.float32)])[-self.MAX_PARTICLES :]
 
     def _sample(self, mask, n, stride=1):
         """Hasta n posiciones (xs, ys) al azar donde mask > 0.5, mirando uno de cada `stride` píxeles."""
@@ -206,38 +241,50 @@ class Vanish:
         ys, xs = np.divmod(idx, sub.shape[1])
         return xs * stride, ys * stride
 
+    def _forces(self, p, free, dt):
+        """Fuerzas propias del efecto sobre las partículas libres (viento, flotación, rebotes...)."""
+
     def _particles(self, out, dt):
         p = self.particles
-        p[:, 0] += p[:, 2] * dt
-        p[:, 1] += p[:, 3] * dt
-        p[:, 3] += self.GRAVITY * dt
-        p[:, 2] *= self.DRAG
-        p[:, 4] -= dt
-        inside = (p[:, 0] > -50) & (p[:, 0] < self.w + 50) & (p[:, 1] > -50) & (p[:, 1] < self.h + 50)
-        p = p[(p[:, 4] > 0) & inside]
-        self.particles = p
+        p[:, LIFE] -= dt
+        homing = p[:, TX] >= 0
+        free = ~homing
+        self._forces(p, free, dt)
+        p[free, X] += p[free, VX] * dt
+        p[free, Y] += p[free, VY] * dt
+        p[free, VY] += self.GRAVITY * dt
+        p[free, VX] *= self.DRAG
+        e = np.clip(p[homing, LIFE] / p[homing, MAX_LIFE], 0, 1) ** 2
+        p[homing, X] = p[homing, TX] + p[homing, VX] * e
+        p[homing, Y] = p[homing, TY] + p[homing, VY] * e
+        inside = (p[:, X] > -60) & (p[:, X] < self.w + 60) & (p[:, Y] > -60) & (p[:, Y] < self.h + 60)
+        self.particles = p = p[(p[:, LIFE] > 0) & (inside | homing)]
         return self._draw_particles(out, p)
 
     def _draw_particles(self, out, p):
         """Por defecto: cuadrados opacos del color de cada partícula."""
         out = out.copy()
-        for x, y, _, _, _, _, size, b, g, r, _ in p.tolist():
-            s = max(1, int(size))
-            cv2.rectangle(out, (int(x), int(y)), (int(x) + s - 1, int(y) + s - 1), (b, g, r), -1)
+        for row in p.tolist():
+            x, y, s = int(row[X]), int(row[Y]), max(1, int(row[SIZE]))
+            cv2.rectangle(out, (x, y), (x + s - 1, y + s - 1), tuple(row[COLOR]), -1)
         return out
 
-    def _splat(self, img, p, fade=True):
-        """Dibuja en img muchas partículas pequeñas (hasta 3 px) de golpe, sin bucle de Python."""
-        xs, ys = p[:, 0].astype(np.int32), p[:, 1].astype(np.int32)
-        size = np.clip(p[:, 6], 1, 3).astype(np.int32)
-        colors = p[:, 7:10] * (p[:, 4:5] / p[:, 5:6]) if fade else p[:, 7:10]
-        colors = np.clip(colors, 0, 255).astype(np.uint8)
-        for dy in range(3):
-            for dx in range(3):
+    def _splat(self, img, p, fade=True, max_size=3, scale=1.0):
+        """Dibuja en img muchas partículas pequeñas (hasta max_size px) de golpe, sin bucle de Python.
+
+        scale: para dibujar en una capa a otra resolución (p. ej. 0.25 para una capa a 1/4).
+        """
+        h, w = img.shape[:2]
+        xs, ys = (p[:, X] * scale).astype(np.int32), (p[:, Y] * scale).astype(np.int32)
+        size = np.clip(p[:, SIZE] * scale, 1, max_size).astype(np.int32)
+        colors = p[:, COLOR] * (p[:, LIFE : LIFE + 1] / p[:, MAX_LIFE : MAX_LIFE + 1]) if fade else p[:, COLOR]
+        colors = np.clip(colors, 0, 255).astype(img.dtype)
+        for dy in range(max_size):
+            for dx in range(max_size):
                 sel = size > max(dx, dy)
                 x, y = xs[sel] + dx, ys[sel] + dy
-                ok = (x >= 0) & (x < self.w) & (y >= 0) & (y < self.h)
-                img[y[ok], x[ok]] = colors[sel][ok]
+                ok = (x >= 0) & (x < w) & (y >= 0) & (y < h)
+                img[y[ok], x[ok]] = colors[sel][ok] if img.ndim == 3 else colors[sel][ok, 0]
         return img
 
 
@@ -255,9 +302,19 @@ def below(values, limit):
     return cv2.threshold(values, limit - 1e-6, 1.0, cv2.THRESH_BINARY_INV)[1]
 
 
+def band(values, lo, hi):
+    """1.0 donde lo <= values < hi (float32)."""
+    return below(values, hi) - below(values, lo)
+
+
 def glow(layer, alpha=2.0, sigma=3):
     """Halo de luz alrededor de una capa brillante (calculado a 1/4 de resolución, que es lo caro)."""
     h, w = layer.shape[:2]
     small = cv2.resize(layer, (w // 4, h // 4), interpolation=cv2.INTER_AREA)
     halo = cv2.resize(cv2.GaussianBlur(small, (0, 0), sigma), (w, h))
     return cv2.convertScaleAbs(halo, alpha=alpha)
+
+
+def gray3(img):
+    """Imagen en escala de grises, en 3 canales."""
+    return cv2.cvtColor(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), cv2.COLOR_GRAY2BGR)

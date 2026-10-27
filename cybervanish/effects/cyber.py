@@ -219,7 +219,7 @@ class CyberVanish(Vanish):
 
     def _draw_particles(self, out, p):
         layer = np.zeros_like(out)
-        for x, y, _, _, life, max_life, size, b, g, r, glyph in p.tolist():
+        for x, y, _, _, life, max_life, size, b, g, r, glyph, *_ in p.tolist():
             f = life / max_life
             color = (b * f, g * f, r * f)
             if glyph >= 0:

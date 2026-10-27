@@ -43,13 +43,15 @@ cybervanish --list-effects       # lista los efectos y sus teclas
 | Tecla | `--effect` | Qué hace |
 |---|---|---|
 | `1` | `cyber` | holograma, bloques glitch de neón, onda de choque y HUD `SIGNAL_LOST` |
-| `2` | `polvo` | te vuelves ceniza y te deshaces en polvo que se lleva el viento |
-| `3` | `fuego` | un borde de brasa te consume dejando chispas que suben |
-| `4` | `teleport` | te llenas de luz y destellos y te vas por un haz de energía |
-| `5` | `derretir` | te derrites y escurres hacia abajo como cera |
-| `6` | `pixel` | te pixelas en bloques cada vez más grandes que se sueltan y caen |
-| `7` | `fantasma` | te vuelves translúcido y ondulas como un espejismo hasta desvanecerte |
-| `8` | `matrix` | te conviertes en lluvia de código verde que se apaga |
+| `2` | `polvo` | te vuelves ceniza con filo de carbón y te deshaces en granos y trozos que se lleva un viento racheado |
+| `3` | `fuego` | un frente de brasa con llamas que lamen hacia arriba, grietas al rojo, aire que tiembla, chispas y humo |
+| `4` | `teleport` | un escáner te llena de energía, te vuelves luz, te comprimes en una línea, luego en un punto, y estallas en un destello |
+| `5` | `derretir` | te derrites como cera: chorretones brillantes, gotas que caen y un charco que se evapora |
+| `6` | `pixel` | te pixelas a saltos con paleta retro en bloques con relieve que se sueltan, giran y rebotan |
+| `7` | `fantasma` | te vuelves un espectro translúcido que se separa en colores, ondula en jirones y deja ecos que suben |
+| `8` | `matrix` | te digitalizas en verde y te conviertes en lluvia de código con cabezas blancas que dibuja tu cara |
+
+Al **reaparecer**, todo ocurre al revés: los granos de polvo y los bloques vuelan de vuelta y aterrizan en su sitio justo cuando esa parte de ti aparece, el punto de luz se abre en una línea y luego en tu cuerpo, etc.
 
 Pulsa la tecla en la ventana de vista previa para cambiar de efecto en vivo (no a mitad de una transición; si estás invisible, sigues invisible y reapareces con el nuevo).
 
@@ -127,11 +129,14 @@ Lo que te da la base:
 | `self._front(p, vanishing, margin)` | distancia de cada píxel al frente que avanza desde la mano (o de lado) |
 | `self._background(...)` | mezcla correcta de la imagen en vivo con el fondo guardado |
 | `self._sample(mask, n)` / `self._emit(...)` | elegir píxeles y lanzar partículas desde ahí |
-| `GRAVITY`, `DRAG`, `MAX_PARTICLES` | física de las partículas |
+| `self._arriving(d, margin, lead)` / `self._emit_homing(...)` | al reaparecer, partículas que vuelan a su sitio y aterrizan justo cuando ese píxel aparece |
+| `self._splat(img, p)` | dibujar miles de partículas pequeñas de golpe |
+| `glow`, `band`, `below`, `smoothstep`, `gray3` | utilidades de `base.py` para halos, bandas y mezclas |
+| `GRAVITY`, `DRAG`, `MAX_PARTICLES`, `_forces()` | física de las partículas (viento, flotación, rebotes...) |
 | `GRID`, `MIX`, `BLOB_SIGMA` | forma del frente (recorrido / manchas / ruido) |
 | `_plan()`, `_draw_particles()`, `_vanished()`, `_finish()` | sobrescríbelos si necesitas algo distinto |
 
-Un frame a 1280x720 debería costar menos de ~20 ms (los efectos de serie van de 9 a 25 ms).
+Un frame a 1280x720 debería costar menos de ~25 ms (los efectos de serie van de 13 a 25 ms en un portátil normal). Trabaja a 1/4 de resolución lo que vaya a quedar difuminado (llamas, humo, halos).
 
 ## Desarrollo
 
