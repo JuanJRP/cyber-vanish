@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      # Los tests solo usan los efectos: no hace falta MediaPipe, cámara ni audio.
+      - name: Instalar dependencias
+        run: |
+          pip install numpy opencv-python-headless pytest ruff
+          pip install -e . --no-deps
+      - name: Ruff
+        run: ruff check .
+      - name: Tests
+        run: pytest -q
