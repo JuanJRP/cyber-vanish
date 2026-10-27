@@ -89,6 +89,7 @@ Pulsa la tecla en la ventana de vista previa para cambiar de efecto en vivo (no 
 - Cámara fija y luz estable: si la cámara se mueve, el fondo capturado deja de encajar.
 - Si al desaparecer queda una sombra, vuelve a pulsar **B**.
 - La vista previa sale reflejada como un espejo (el HUD se lee al revés ahí); lo que reciben los demás va sin reflejar.
+- **`SSL: CERTIFICATE_VERIFY_FAILED` en Mac** al descargar los modelos: ya no debería pasar (se usan los certificados de `certifi`; reinstala con `pip install -e .`). Con una versión antigua, ejecuta `open "/Applications/Python 3.12/Install Certificates.command"` (cambia 3.12 por tu versión).
 - **¿En el celular?** No funciona en Android/iOS (ni con Termux): MediaPipe no tiene versión para Termux y el sistema no deja crear cámaras virtuales. Úsalo en el ordenador; si quieres usar el celular como cámara, conéctalo como webcam (DroidCam, Iriun o el modo webcam USB de Android 14+) y elígelo con `--camera N`.
 
 ## Sin capturar el fondo
@@ -102,6 +103,8 @@ Si no pulsas **B**, la app aprende la habitación con lo que va quedando a la vi
 Antes se usaba `cv2.inpaint`, que estira los bordes hacia dentro y deja las rayas en abanico. El relleno nuevo tarda ~2 s, así que se calcula en segundo plano desde que abres la app (solo mientras se te ve, para no frenar los efectos) y se rehace cuando se ha visto más fondo; hasta que está listo, se usa el rápido.
 
 Lo que nunca se vio no se puede adivinar: si detrás de ti hay un objeto que la cámara no llegó a ver, se rellenará con algo plausible de alrededor, no con el objeto. Para un resultado perfecto, captura con **B**; si no, muévete un poco (inclínate a un lado y al otro) antes de desaparecer para que vea más.
+
+Para no aprender basura: no se aprende nada mientras la cámara arranca (los primeros frames suelen salir negros o subiendo de brillo, y en ellos MediaPipe no ve a nadie; antes eso dejaba un parche negro donde estabas), y un píxel solo cuenta como fondo tras verse libre en 3 actualizaciones seguidas (si MediaPipe te pierde un instante, no te graba en el fondo).
 
 Para ver cómo queda con una foto de tu habitación, sin cámara:
 

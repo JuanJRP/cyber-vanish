@@ -73,19 +73,31 @@ def plate():
     p.close()
 
 
+def learn(plate, frame, person, n=12, now=0.0):
+    """Varias actualizaciones con el mismo frame: lo que tarda en arrancar la cámara y en fiarse de un píxel."""
+    for i in range(n):
+        plate.update(frame, person, now + i / 15)
+
+
+def wait_fill(plate):
+    """Espera al relleno en segundo plano (si sigue en marcha)."""
+    if plate.job is not None:
+        plate.job.result(timeout=60)
+
+
 def test_plate_uses_good_fill_once_ready(plate):
     room, hole = textured_room(), person_hole()
     frame = room.copy()
     frame[hole] = (30, 30, 200)                    # la persona
     person = hole.astype(np.float32)
 
-    plate.update(frame, person, now=0.0)
-    assert plate.job is not None                    # el relleno bueno arranca en segundo plano
-    early = plate.get(0.0)                          # mientras tanto, el rápido
-    assert early.shape == room.shape
+    learn(plate, frame, person)
+    assert plate.job is not None or plate.filled is not None   # el relleno bueno arranca solo
+    assert plate.get(1.0).shape == room.shape                  # mientras tanto, el rápido
 
-    plate.job.result(timeout=60)
-    bg = plate.get(0.1)
+    wait_fill(plate)
+    bg = plate.get(1.1)
+    assert plate.filled is not None
     unseen = ~plate.seen
     assert unseen.any()
     assert np.array_equal(bg[plate.seen], plate.plate[plate.seen])
@@ -95,10 +107,39 @@ def test_plate_uses_good_fill_once_ready(plate):
 def test_capture_discards_old_fill(plate):
     room, hole = textured_room(), person_hole()
     person = hole.astype(np.float32)
-    plate.update(room, person, now=0.0)
-    old_job = plate.job
+    learn(plate, room, person)
     plate.capture(room, np.zeros((H, W), np.float32))
-    old_job.result(timeout=60)
-    plate.get(0.1)
+    wait_fill(plate)
+    plate.get(1.0)
     assert plate.filled is None                     # con todo visto ya no hace falta relleno
     assert plate.seen.all()
+
+
+def test_dark_camera_start_is_not_learned(plate):
+    """Al arrancar, la webcam da frames negros en los que MediaPipe no ve a nadie: no deben quedar en el fondo."""
+    room, hole = textured_room(), person_hole()
+    frame = room.copy()
+    frame[hole] = (30, 30, 200)
+    nobody = np.zeros((H, W), np.float32)
+    for i in range(10):
+        plate.update(np.zeros_like(room), nobody, i / 15)      # cámara aún a oscuras
+    for i in range(6):                                         # la exposición va subiendo
+        plate.update(cv2.convertScaleAbs(frame, alpha=(i + 1) / 6), nobody, (10 + i) / 15)
+    assert not plate.seen.any()
+    learn(plate, frame, hole.astype(np.float32), n=16, now=2.0)
+    assert not plate.seen[hole].any(), "se aprendió como fondo la zona donde estabas"
+    wait_fill(plate)
+    bg = plate.get(4.0)
+    assert bg[hole].max(axis=1).mean() > 60, "queda un parche negro"
+
+
+def test_one_frame_mask_dropout_is_not_learned(plate):
+    """Si MediaPipe te pierde durante un frame, no te graba en el fondo."""
+    room, hole = textured_room(), person_hole()
+    frame = room.copy()
+    frame[hole] = (30, 30, 200)
+    person = hole.astype(np.float32)
+    learn(plate, frame, person, n=12)
+    plate.update(frame, np.zeros((H, W), np.float32), 1.0)      # un frame sin persona detectada
+    plate.update(frame, person, 1.1)
+    assert not plate.seen[hole].any()
