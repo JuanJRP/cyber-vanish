@@ -14,6 +14,14 @@ import numpy as np
 if TYPE_CHECKING:
     from ..background import BackgroundPlate
 
+# Estática sobre la foto del fondo (niveles de 0-255): tu webcam tiene ~2,3 de ruido; algo más tapa
+# el ruido congelado de la foto.
+STATIC = 3.5               # grano
+STATIC_FLICKER = 0.8       # parpadeo de brillo de un frame a otro
+STATIC_BAND = 4            # banda de interferencia: cuánto aclara
+STATIC_BAND_HEIGHT = 60    # ...cuántas filas mide
+STATIC_BAND_PERIOD = 6.0   # ...cuántos segundos tarda en recorrer la imagen
+
 # Columnas de Vanish.particles.
 X, Y, VX, VY, LIFE, MAX_LIFE, SIZE = range(7)
 COLOR = slice(7, 10)       # b, g, r
@@ -83,8 +91,9 @@ class Vanish:
         self.drift = np.ones((height, width), np.float32)    # hacia qué lado salen volando los trozos (-1 / +1)
         self.origin_px: tuple[int, int] | None = None        # punto del chasquido
         self.particles = np.zeros((0, COLUMNS), np.float32)
-        # Grano de cámara precalculado: la foto del fondo sola parecería congelada.
-        self.grain = [self.rng.integers(0, 5, (height, width, 3), dtype=np.uint8) for _ in range(6)]
+        # Estática precalculada: la foto del fondo sola parecería congelada (ver _with_grain).
+        self.grain = [self._static_frame() for _ in range(6)]
+        self.band_y = 0.0
 
     @property
     def busy(self) -> bool:
@@ -182,9 +191,33 @@ class Vanish:
 
     # ---------------------------------------------------------------- piezas
 
+    def _static_frame(self):
+        """Un frame de estática como (lo que se suma, lo que se resta), en uint8 para que sea rápido.
+
+        Como el ruido de una webcam: grumoso (no píxel a píxel) y casi todo en brillo, con un poco de color.
+        """
+        h, w = self.h, self.w
+        luma = cv2.GaussianBlur(self.rng.normal(0, 1, (h, w)).astype(np.float32), (0, 0), 0.8)
+        luma *= STATIC / max(float(luma.std()), 1e-6)
+        noise = luma[..., None] + self.rng.normal(0, STATIC * 0.35, (h, w, 3)).astype(np.float32)
+        return np.clip(noise, 0, 255).astype(np.uint8), np.clip(-noise, 0, 255).astype(np.uint8)
+
     def _with_grain(self, img):
+        """La foto del fondo con estática: grano que cambia cada frame, un leve parpadeo de brillo y una
+        banda de interferencia tenue que baja despacio. Así no parece una foto quieta."""
         i, j = self.rng.choice(len(self.grain), 2, replace=False)
-        return cv2.subtract(cv2.add(img, self.grain[i]), self.grain[j])
+        out = cv2.subtract(cv2.add(img, self.grain[i][0]), self.grain[j][1])
+        flicker = float(self.rng.normal(0, STATIC_FLICKER))
+        out = cv2.add(out, (flicker,) * 3) if flicker > 0 else cv2.subtract(out, (-flicker,) * 3)
+        # La banda: unas filas algo más claras que recorren la imagen de arriba abajo cada pocos segundos.
+        self.band_y = (self.band_y + self.h / (30 * STATIC_BAND_PERIOD)) % (self.h + STATIC_BAND_HEIGHT)
+        y0 = int(self.band_y) - STATIC_BAND_HEIGHT
+        top, bottom = max(0, y0), min(self.h, y0 + STATIC_BAND_HEIGHT)
+        if bottom > top:
+            rows = np.sin(np.linspace(0, np.pi, STATIC_BAND_HEIGHT))[top - y0 : bottom - y0] * STATIC_BAND
+            out[top:bottom] = cv2.add(out[top:bottom], np.repeat(rows[:, None, None], 3, axis=2).astype(np.uint8)
+                                      .repeat(self.w, axis=1))
+        return out
 
     def _front(self, p, vanishing, margin=0.0):
         """Distancia de cada píxel al frente de avance: > 0 sigue ahí, <= 0 ya se fue (o aún no llegó).
