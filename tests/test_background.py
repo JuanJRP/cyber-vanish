@@ -115,6 +115,18 @@ def test_capture_discards_old_fill(plate):
     assert plate.seen.all()
 
 
+def test_capture_is_the_photo_as_is(plate):
+    """Lo capturado con B es la foto tal cual: aunque MediaPipe marque algo (la silla vacía), no hay
+    huecos que rellenar ni restos del fondo aprendido antes. Al desaparecer se ve esa foto."""
+    room, hole = textured_room(), person_hole()
+    sitting = room.copy()
+    sitting[hole] = (30, 30, 200)
+    learn(plate, sitting, np.zeros((H, W), np.float32))   # el fondo aprendido te tiene dentro
+    plate.capture(room, hole.astype(np.float32) * 0.6)
+    assert plate.seen.all()
+    assert np.array_equal(plate.get(1.0), room)
+
+
 def test_dark_camera_start_is_not_learned(plate):
     """Al arrancar, la webcam da frames negros en los que MediaPipe no ve a nadie: no deben quedar en el fondo."""
     room, hole = textured_room(), person_hole()
