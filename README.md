@@ -32,7 +32,7 @@ cybervanish --effect fuego       # empieza con otro efecto
 cybervanish --list-effects       # lista los efectos y sus teclas
 ```
 
-1. Pulsa **B**, levántate y sal del encuadre: en 5 s captura la habitación. Es lo que mejor queda. (Si no lo haces, el fondo se va aprendiendo solo mientras te mueves, y lo que nunca se llegó a ver se reconstruye copiando textura real de tu habitación; ver [Sin capturar el fondo](#sin-capturar-el-fondo).)
+1. Pulsa **B**, levántate y sal del encuadre: en 5 s captura la habitación tal cual (la imagen entera, sin recortar nada: si sigues en cuadro, saldrás en la foto y la terminal te avisa). Al desaparecer se ve esa foto donde estabas, con estática de cámara (grano, un leve parpadeo y una banda de interferencia) para que no parezca una foto quieta. Es lo que mejor queda. (Si no lo haces, el fondo se va aprendiendo solo mientras te mueves, y lo que nunca se llegó a ver se reconstruye copiando textura real de tu habitación; ver [Sin capturar el fondo](#sin-capturar-el-fondo).)
    - Todo lo que esté pegado a ti y no estuviera en ese fondo desaparece contigo: silla, sombra, lo que tengas en la mano.
    - **Silla giratoria**: captura el fondo *sin la silla* (apártala) y desaparecerás con silla y todo.
 2. En Meet → Configuración → Vídeo, elige **Cyber Cam** / **OBS Virtual Camera**.

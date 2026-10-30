@@ -160,12 +160,11 @@ def main():
             pending = job
 
             if capture_at is not None and now >= capture_at:
-                coverage = plate.capture(frame, person)
+                plate.capture(frame, person)
                 capture_at = None
-                print(f"Fondo capturado ({coverage:.0%}).")
-                if coverage < 0.97:
-                    print("  Seguías en cuadro: esa zona se completará cuando te muevas. "
-                          "Pulsa B otra vez si queda mal.")
+                print("Fondo capturado.")
+                if (person > 0.5).mean() > 0.02:
+                    print("  Parece que seguías en cuadro y saldrás en la foto del fondo. Pulsa B otra vez.")
             elif capture_at is None and frame_i % 2 == 0:
                 # El relleno de lo no visto se prepara solo cuando sobra CPU: mientras se te ve.
                 plate.update(frame, person, now if fx.state == "visible" else None)

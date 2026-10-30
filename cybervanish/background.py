@@ -69,12 +69,13 @@ class BackgroundPlate:
         return cv2.resize(cv2.erode(small, self.kernel), self.size, interpolation=cv2.INTER_NEAREST).astype(bool)
 
     def capture(self, frame, person):
-        """Fija el fondo con el frame actual. Si la persona sigue en cuadro, esa zona queda pendiente."""
-        free = self._free(person)
-        if self.plate is None:
-            self.plate = frame.copy()
-        np.copyto(self.plate, frame, where=free[..., None])
-        self.seen = free
+        """Fija el fondo con el frame actual, tal cual: es la foto que se verá donde estabas.
+
+        No se recorta lo que MediaPipe crea ver como persona: con la habitación vacía a veces marca
+        la silla o una sombra, y ahí quedaba el fondo viejo o un relleno inventado (una mancha).
+        """
+        self.plate = frame.copy()
+        self.seen = np.ones(frame.shape[:2], bool)
         self.locked = True
         self.prev_attached = None
         self.quick = self.filled = None
